@@ -11,10 +11,14 @@ namespace HitmanPatcher
         public bool minimizeToTray;
         public bool darkModeEnabled;
         public List<string> trayDomains;
+        public string peacockServerBatPath;
+        public string hitmanExePath;
+        public bool autoLaunchServer;
+        public bool autoLaunchGame;
+        public bool autoKillServerOnGameClose;
 
         public Settings()
         {
-            // Default settings
             patchOptions = new MemoryPatcher.Options
             {
                 CustomConfigDomain = "127.0.0.1",
@@ -29,6 +33,11 @@ namespace HitmanPatcher
             startInTray = false;
             minimizeToTray = false;
             trayDomains = new List<string>();
+            peacockServerBatPath = "";
+            hitmanExePath = "";
+            autoLaunchServer = true;
+            autoLaunchGame = true;
+            autoKillServerOnGameClose = true;
         }
 
         private static string GetSavePath()
@@ -63,6 +72,11 @@ namespace HitmanPatcher
 			lines.Add(string.Format("DarkModeEnabled={0}", darkModeEnabled));
             lines.Add(string.Format("startInTray={0}", startInTray));
             lines.Add(string.Format("minToTray={0}", minimizeToTray));
+            lines.Add(string.Format("PeacockServerBatPath={0}", peacockServerBatPath ?? ""));
+            lines.Add(string.Format("HitmanExePath={0}", hitmanExePath ?? ""));
+            lines.Add(string.Format("AutoLaunchServer={0}", autoLaunchServer));
+            lines.Add(string.Format("AutoLaunchGame={0}", autoLaunchGame));
+            lines.Add(string.Format("AutoKillServerOnGameClose={0}", autoKillServerOnGameClose));
 
             foreach (string domain in trayDomains)
             {
@@ -90,29 +104,53 @@ namespace HitmanPatcher
                             continue;
 
                         string[] linecontents = line.Split(new char[] { '=' }, 2);
-                        switch (linecontents[0])
+                        if (linecontents.Length < 2)
+                            continue;
+                            
+                        try
                         {
-                            case "CustomConfigDomain":
-                                result.patchOptions.CustomConfigDomain = linecontents[1];
-                                break;
-                            case "UseHttp":
-                                result.patchOptions.UseHttp = bool.Parse(linecontents[1]);
-                                break;
-                            case "DisableForceDynamicResources":
-                                result.patchOptions.DisableForceOfflineOnFailedDynamicResources = bool.Parse(linecontents[1]);
-                                break;
-							case "DarkModeEnabled":
-								result.darkModeEnabled = bool.Parse(linecontents[1]);
-								break;
-                            case "startInTray":
-                                result.startInTray = bool.Parse(linecontents[1]);
-                                break;
-                            case "minToTray":
-                                result.minimizeToTray = bool.Parse(linecontents[1]);
-                                break;
-                            case "trayDomain":
-                                result.trayDomains.Add(linecontents[1]);
-                                break;
+                            switch (linecontents[0])
+                            {
+                                case "CustomConfigDomain":
+                                    result.patchOptions.CustomConfigDomain = linecontents[1];
+                                    break;
+                                case "UseHttp":
+                                    result.patchOptions.UseHttp = bool.Parse(linecontents[1]);
+                                    break;
+                                case "DisableForceDynamicResources":
+                                    result.patchOptions.DisableForceOfflineOnFailedDynamicResources = bool.Parse(linecontents[1]);
+                                    break;
+                                case "DarkModeEnabled":
+                                    result.darkModeEnabled = bool.Parse(linecontents[1]);
+                                    break;
+                                case "startInTray":
+                                    result.startInTray = bool.Parse(linecontents[1]);
+                                    break;
+                                case "minToTray":
+                                    result.minimizeToTray = bool.Parse(linecontents[1]);
+                                    break;
+                                case "trayDomain":
+                                    result.trayDomains.Add(linecontents[1]);
+                                    break;
+                                case "PeacockServerBatPath":
+                                    result.peacockServerBatPath = linecontents[1];
+                                    break;
+                                case "HitmanExePath":
+                                    result.hitmanExePath = linecontents[1];
+                                    break;
+                                case "AutoLaunchServer":
+                                    result.autoLaunchServer = bool.Parse(linecontents[1]);
+                                    break;
+                                case "AutoLaunchGame":
+                                    result.autoLaunchGame = bool.Parse(linecontents[1]);
+                                    break;
+                                case "AutoKillServerOnGameClose":
+                                    result.autoKillServerOnGameClose = bool.Parse(linecontents[1]);
+                                    break;
+                            }
+                        }
+                        catch
+                        {
                         }
                     }
                 }

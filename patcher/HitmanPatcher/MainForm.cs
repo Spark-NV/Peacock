@@ -6,6 +6,9 @@ using System.Windows.Forms;
 using System.Drawing;
 using System.IO;
 using System.Text;
+using System.Threading.Tasks;
+using System.Runtime.InteropServices;
+using System.ComponentModel;
 using Timer = System.Windows.Forms.Timer;
 
 namespace HitmanPatcher
@@ -27,28 +30,31 @@ namespace HitmanPatcher
 
         private static readonly Dictionary<string, string> serversReverse = servers.ToDictionary(kvp => kvp.Value, kvp => kvp.Key);
 
+        private Timer monitoringTimer;
+        private Process peacockServerProcess;
+        private Process hitmanGameProcess;
+        private bool gameWasLaunched = false;
+        private bool isShuttingDown = false;
+        private bool gameProcessDetected = false;
+        private IntPtr serverJobHandle = IntPtr.Zero;
+
         private void ToggleTheme(bool darkModeEnabled)
         {
-            // Change main form background
             BackColor = darkModeEnabled ? Color.FromArgb(24, 26, 27) : SystemColors.Control;
 
-            // Change the text label colours
             serverAddressLabel.ForeColor = darkModeEnabled ? Color.White : SystemColors.ControlText;
             logLabel.ForeColor = darkModeEnabled ? Color.White : SystemColors.ControlText;
             basedOnLabel.ForeColor = darkModeEnabled ? Color.White : SystemColors.ControlText;
             statusLabel.ForeColor = darkModeEnabled ? Color.White : SystemColors.ControlText;
             localghostLinkLabel.LinkColor = darkModeEnabled ? Color.FromArgb(50, 115, 234) : Color.FromArgb(0, 0, 255);
 
-            // Change the log colours
             logListView.BackColor = darkModeEnabled ? Color.FromArgb(19, 21, 22) : SystemColors.Window;
             logListView.ForeColor = darkModeEnabled ? Color.White : SystemColors.WindowText;
 
-            // Change combo box colours and style
             serverUrlComboBox.FlatStyle = darkModeEnabled ? FlatStyle.Flat : FlatStyle.Standard;
             serverUrlComboBox.BackColor = darkModeEnabled ? Color.FromArgb(19, 21, 22) : SystemColors.Window;
             serverUrlComboBox.ForeColor = darkModeEnabled ? Color.White : SystemColors.ControlText;
 
-            // Change button colours and style
             buttonRepatch.FlatStyle = darkModeEnabled ? FlatStyle.Flat : FlatStyle.Standard;
             buttonRepatch.BackColor = darkModeEnabled ? Color.FromArgb(19, 21, 22) : SystemColors.Control;
             buttonRepatch.ForeColor = darkModeEnabled ? Color.White : SystemColors.ControlText;
@@ -64,12 +70,6 @@ namespace HitmanPatcher
             
             InitializeComponent();
             logListView.Columns[0].Width = logListView.Width - 4 - SystemInformation.VerticalScrollBarWidth;
-            Timer timer = new Timer
-            {
-                Interval = 1000
-            };
-            timer.Tick += (sender, args) => MemoryPatcher.PatchAllProcesses(this, CurrentSettings.patchOptions);
-            timer.Enabled = true;
 
             try
             {
@@ -93,6 +93,194 @@ namespace HitmanPatcher
                 ShowInTaskbar = false;
                 trayIcon.ShowBalloonTip(5000, "Peacock Patcher", "The Peacock Patcher has been started in the tray.", ToolTipIcon.Info);
             }
+
+            StartLaunchSequence();
+        }
+
+        private async void StartLaunchSequence()
+        {
+            monitoringTimer = new Timer
+            {
+                Interval = 1000
+            };
+            monitoringTimer.Tick += (sender, args) => 
+            {
+                MemoryPatcher.PatchAllProcesses(this, CurrentSettings.patchOptions);
+                
+                if (!gameProcessDetected && gameWasLaunched)
+                {
+                    Process[] hitmanProcesses = Process.GetProcessesByName("HITMAN");
+                    Process[] hitman2Processes = Process.GetProcessesByName("HITMAN2");
+                    Process[] hitman3Processes = Process.GetProcessesByName("HITMAN3");
+                    
+                    bool anyGameRunning = hitmanProcesses.Length > 0 || hitman2Processes.Length > 0 || hitman3Processes.Length > 0;
+                    
+                    foreach (var p in hitmanProcesses) p.Dispose();
+                    foreach (var p in hitman2Processes) p.Dispose();
+                    foreach (var p in hitman3Processes) p.Dispose();
+                    
+                    if (anyGameRunning)
+                    {
+                        gameProcessDetected = true;
+                    }
+                }
+                
+                if (gameProcessDetected && !isShuttingDown)
+                {
+                    Process[] hitmanProcesses = Process.GetProcessesByName("HITMAN");
+                    Process[] hitman2Processes = Process.GetProcessesByName("HITMAN2");
+                    Process[] hitman3Processes = Process.GetProcessesByName("HITMAN3");
+                    
+                    bool anyGameRunning = hitmanProcesses.Length > 0 || hitman2Processes.Length > 0 || hitman3Processes.Length > 0;
+                    
+                    foreach (var p in hitmanProcesses) p.Dispose();
+                    foreach (var p in hitman2Processes) p.Dispose();
+                    foreach (var p in hitman3Processes) p.Dispose();
+                    
+                    if (!anyGameRunning)
+                    {
+                        ShutdownAfterGameExit();
+                        return;
+                    }
+                }
+            };
+
+            if (CurrentSettings.autoLaunchServer && !string.IsNullOrWhiteSpace(CurrentSettings.peacockServerBatPath) && File.Exists(CurrentSettings.peacockServerBatPath))
+            {
+                try
+                {
+                    log($"Launching Peacock server: {CurrentSettings.peacockServerBatPath}");
+                    
+                    serverJobHandle = Pinvoke.CreateJobObject(IntPtr.Zero, null);
+                    if (serverJobHandle == IntPtr.Zero)
+                    {
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to create job object");
+                    }
+
+                    JOBOBJECT_EXTENDED_LIMIT_INFORMATION jobInfo = new JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+                    {
+                        BasicLimitInformation = new JOBOBJECT_BASIC_LIMIT_INFORMATION
+                        {
+                            LimitFlags = Pinvoke.JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+                        }
+                    };
+
+                    if (!Pinvoke.SetInformationJobObject(serverJobHandle, JOBOBJECTINFOCLASS.JobObjectExtendedLimitInformation, ref jobInfo, (uint)Marshal.SizeOf(typeof(JOBOBJECT_EXTENDED_LIMIT_INFORMATION))))
+                    {
+                        Pinvoke.CloseHandle(serverJobHandle);
+                        serverJobHandle = IntPtr.Zero;
+                        throw new Win32Exception(Marshal.GetLastWin32Error(), "Failed to configure job object");
+                    }
+
+                    ProcessStartInfo startInfo = new ProcessStartInfo
+                    {
+                        FileName = CurrentSettings.peacockServerBatPath,
+                        WorkingDirectory = Path.GetDirectoryName(CurrentSettings.peacockServerBatPath),
+                        UseShellExecute = true,
+                        CreateNoWindow = false
+                    };
+                    peacockServerProcess = Process.Start(startInfo);
+                    
+                    if (peacockServerProcess != null)
+                    {
+                        IntPtr processHandle = Pinvoke.OpenProcess(ProcessAccess.PROCESS_SET_QUOTA | ProcessAccess.PROCESS_TERMINATE, false, peacockServerProcess.Id);
+                        if (processHandle != IntPtr.Zero)
+                        {
+                            if (!Pinvoke.AssignProcessToJobObject(serverJobHandle, processHandle))
+                            {
+                                log($"Warning: Failed to assign process to job object: {Marshal.GetLastWin32Error()}");
+                            }
+                            Pinvoke.CloseHandle(processHandle);
+                        }
+                    }
+                    
+                    log("Peacock server launched");
+                }
+                catch (Exception ex)
+                {
+                    log($"Failed to launch Peacock server: {ex.Message}");
+                    if (serverJobHandle != IntPtr.Zero)
+                    {
+                        Pinvoke.CloseHandle(serverJobHandle);
+                        serverJobHandle = IntPtr.Zero;
+                    }
+                }
+
+                await Task.Delay(3000);
+                log("Waited 3 seconds, launching game...");
+            }
+            if (CurrentSettings.autoLaunchGame && !string.IsNullOrWhiteSpace(CurrentSettings.hitmanExePath) && File.Exists(CurrentSettings.hitmanExePath))
+            {
+                try
+                {
+                    log($"Launching Hitman: {CurrentSettings.hitmanExePath}");
+                    ProcessStartInfo startInfo = new ProcessStartInfo
+                    {
+                        FileName = CurrentSettings.hitmanExePath,
+                        WorkingDirectory = Path.GetDirectoryName(CurrentSettings.hitmanExePath),
+                        UseShellExecute = true
+                    };
+                    hitmanGameProcess = Process.Start(startInfo);
+                    gameWasLaunched = true;
+                    
+                    log("Hitman launched");
+                }
+                catch (Exception ex)
+                {
+                    log($"Failed to launch Hitman: {ex.Message}");
+                }
+            }
+
+            monitoringTimer.Enabled = true;
+            log("Process monitoring started");
+        }
+
+        private void ShutdownAfterGameExit()
+        {
+            if (isShuttingDown) return;
+            isShuttingDown = true;
+            
+            if (monitoringTimer != null)
+            {
+                monitoringTimer.Enabled = false;
+            }
+
+            log("Hitman game closed, shutting down...");
+
+            if (CurrentSettings.autoKillServerOnGameClose)
+            {
+                log("Waiting 5 seconds for server to save data...");
+                System.Threading.Thread.Sleep(5000);
+            }
+
+            if (CurrentSettings.autoKillServerOnGameClose && serverJobHandle != IntPtr.Zero)
+            {
+                try
+                {
+                    log("Closing Peacock server...");
+                    Pinvoke.CloseHandle(serverJobHandle);
+                    serverJobHandle = IntPtr.Zero;
+                    log("Peacock server closed");
+                }
+                catch (Exception ex)
+                {
+                    log($"Error closing Peacock server: {ex.Message}");
+                }
+            }
+            
+            if (peacockServerProcess != null)
+            {
+                try
+                {
+                    peacockServerProcess.Dispose();
+                }
+                catch { }
+            }
+
+            System.Threading.Thread.Sleep(500);
+
+            log("Exiting patcher...");
+            Application.Exit();
         }
 
         public void log(string msg)
@@ -121,6 +309,12 @@ namespace HitmanPatcher
 
         private void MainForm_FormClosing(object sender, FormClosingEventArgs e)
         {
+            if (serverJobHandle != IntPtr.Zero)
+            {
+                Pinvoke.CloseHandle(serverJobHandle);
+                serverJobHandle = IntPtr.Zero;
+            }
+
             if (!Directory.Exists(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + @"\PeacockProject"))
             {
                 Directory.CreateDirectory(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData) + @"\PeacockProject");

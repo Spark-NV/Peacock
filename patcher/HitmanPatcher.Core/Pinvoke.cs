@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 
 namespace HitmanPatcher
 {
-    // from https://docs.microsoft.com/en-us/windows/win32/memory/memory-protection-constants
     [Flags]
     public enum MemProtection : uint
     {
@@ -22,18 +21,17 @@ namespace HitmanPatcher
         PAGE_WRITECOMBINE = 0x00000400
     }
 
-    // from https://docs.microsoft.com/en-us/windows/win32/procthread/process-security-and-access-rights
-    // I've only listed the ones that I use
     [Flags]
     public enum ProcessAccess : uint
     {
-        PROCESS_QUERY_INFORMATION = 0x0400, // Required to retrieve certain information about a process.
-        PROCESS_VM_READ = 0x0010, // Required to read memory in a process using ReadProcessMemory.
-        PROCESS_VM_WRITE = 0x0020, // Required to write to memory in a process using WriteProcessMemory.
-        PROCESS_VM_OPERATION = 0x0008 // Required to perform an operation on the address space of a process using VirtualProtectEx
+        PROCESS_QUERY_INFORMATION = 0x0400,
+        PROCESS_VM_READ = 0x0010,
+        PROCESS_VM_WRITE = 0x0020,
+        PROCESS_VM_OPERATION = 0x0008,
+        PROCESS_SET_QUOTA = 0x0100,
+        PROCESS_TERMINATE = 0x0001
     }
 
-    // from https://docs.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
     public enum PROCESSINFOCLASS
     {
         ProcessBasicInformation = 0,
@@ -44,7 +42,6 @@ namespace HitmanPatcher
         ProcessSubsystemInformation = 75
     }
 
-    // from https://docs.microsoft.com/en-us/windows/win32/api/winternl/nf-winternl-ntqueryinformationprocess
     [StructLayout(LayoutKind.Sequential)]
     public struct PROCESS_BASIC_INFORMATION
     {
@@ -56,8 +53,52 @@ namespace HitmanPatcher
         public IntPtr Reserved3;
     }
 
+    public enum JOBOBJECTINFOCLASS
+    {
+        JobObjectExtendedLimitInformation = 9,
+        JobObjectBasicLimitInformation = 2
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_BASIC_LIMIT_INFORMATION
+    {
+        public long PerProcessUserTimeLimit;
+        public long PerJobUserTimeLimit;
+        public uint LimitFlags;
+        public UIntPtr MinimumWorkingSetSize;
+        public UIntPtr MaximumWorkingSetSize;
+        public uint ActiveProcessLimit;
+        public UIntPtr Affinity;
+        public uint PriorityClass;
+        public uint SchedulingClass;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION
+    {
+        public JOBOBJECT_BASIC_LIMIT_INFORMATION BasicLimitInformation;
+        public IO_COUNTERS IoInfo;
+        public UIntPtr ProcessMemoryLimit;
+        public UIntPtr JobMemoryLimit;
+        public UIntPtr PeakProcessMemoryUsed;
+        public UIntPtr PeakJobMemoryUsed;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct IO_COUNTERS
+    {
+        public ulong ReadOperationCount;
+        public ulong WriteOperationCount;
+        public ulong OtherOperationCount;
+        public ulong ReadTransferCount;
+        public ulong WriteTransferCount;
+        public ulong OtherTransferCount;
+    }
+
     public static class Pinvoke
     {
+        public const uint JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE = 0x2000;
+
         [DllImport("kernel32", SetLastError = true)]
         public static extern IntPtr OpenProcess(ProcessAccess dwDesiredAccess, bool bInheritHandle, int dwProcessId);
 
@@ -75,6 +116,15 @@ namespace HitmanPatcher
 
         [DllImport("ntdll.dll")]
         public static extern int NtQueryInformationProcess(IntPtr hProcess, PROCESSINFOCLASS processInformationClass, out PROCESS_BASIC_INFORMATION processInformation, uint processInformationLength, out uint returnLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetInformationJobObject(IntPtr hJob, JOBOBJECTINFOCLASS JobObjectInformationClass, ref JOBOBJECT_EXTENDED_LIMIT_INFORMATION lpJobObjectInformation, uint cbJobObjectInformationLength);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
 
         public static int GetProcessParentPid(Process process)
         {
@@ -97,10 +147,10 @@ namespace HitmanPatcher
             CloseHandle(hProcess);
             if (result != 0)
             {
-                throw new Win32Exception(result, "(NTSTATUS)"); // not a w32 status code, but an NTSTATUS
+                throw new Win32Exception(result, "(NTSTATUS)");
             }
 
-            return PEB.Reserved3.ToInt32(); // undocumented, but should hold the parent PID
+            return PEB.Reserved3.ToInt32();
         }
     }
 }
